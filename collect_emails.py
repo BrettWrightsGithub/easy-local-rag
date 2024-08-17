@@ -34,7 +34,7 @@ def chunk_text(text, max_length=1000):
     sentences = re.split(r'(?<=[.!?]) +', text)
     chunks = []
     current_chunk = ""
-    
+
     for sentence in sentences:
         if len(current_chunk) + len(sentence) + 1 < max_length:
             current_chunk += (sentence + " ").strip()
@@ -48,9 +48,14 @@ def chunk_text(text, max_length=1000):
 
 def save_chunks_to_vault(chunks):
     vault_path = "vault.txt"
-    with open(vault_path, "a", encoding="utf-8") as vault_file:
-        for chunk in chunks:
-            vault_file.write(chunk.strip() + "\n")
+    try:
+        with open(vault_path, "a", encoding="utf-8") as vault_file:
+            for chunk in chunks:
+                vault_file.write(chunk.strip() + "\n")
+                print(f"Chunk written to vault.txt: {chunk.strip()}")
+        print("Chunks successfully written to vault.txt")
+    except Exception as e:
+        print(f"Error writing chunks to vault.txt: {e}")
 
 def get_text_from_html(html_content):
     soup = BeautifulSoup(html_content, 'lxml')
@@ -73,10 +78,11 @@ def save_plain_text_content(email_bytes, email_id):
             text_content = get_text_from_html(msg.get_payload(decode=True).decode(msg.get_content_charset('utf-8')))
 
     chunks = chunk_text(text_content)
+    print(f"Email ID {email_id} has {len(chunks)} chunks")
     save_chunks_to_vault(chunks)
     return text_content
 
-def search_and_process_emails(imap_client, email_source, search_keyword, start_date, end_date):
+def search_and_process_emails(imap_client, email_source, search_keyword, start_date, end_date, limit=50):
     search_criteria = 'ALL'
     if start_date and end_date:
         search_criteria = f'(SINCE "{start_date}" BEFORE "{end_date}")'
@@ -86,7 +92,7 @@ def search_and_process_emails(imap_client, email_source, search_keyword, start_d
     print(f"Using search criteria for {email_source}: {search_criteria}")
     typ, data = imap_client.search(None, search_criteria)
     if typ == 'OK':
-        email_ids = data[0].split()
+        email_ids = data[0].split()[:limit]  # Limit to the first 50 emails
         print(f"Found {len(email_ids)} emails matching criteria in {email_source}.")
 
         for num in email_ids:
@@ -99,7 +105,6 @@ def search_and_process_emails(imap_client, email_source, search_keyword, start_d
                 print(f"Failed to fetch email ID: {num.decode('utf-8')} from {email_source}")
     else:
         print(f"Failed to find emails with given criteria in {email_source}. No emails found.")
-
 
 def main():
     parser = argparse.ArgumentParser(description="Search and process emails based on optional keyword and date range.")
@@ -122,6 +127,9 @@ def main():
     elif args.startdate or args.enddate:
         print("Both start date and end date must be provided together.")
         return
+    else:
+        start_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
+        end_date = datetime.now().strftime("%d-%b-%Y")
 
     # Retrieve email credentials from environment variables
     gmail_username = os.getenv('GMAIL_USERNAME')
@@ -130,21 +138,32 @@ def main():
     outlook_password = os.getenv('OUTLOOK_PASSWORD')
 
     # Connect to Gmail's IMAP server
-    M = imaplib.IMAP4_SSL('imap.gmail.com')
-    M.login(gmail_username, gmail_password)
-    M.select('inbox')
+    try:
+        M = imaplib.IMAP4_SSL('imap.gmail.com')
+        M.login(gmail_username, gmail_password)
+        M.select('"[Gmail]/All Mail"')
+        print("Logged into Gmail.")
+    except imaplib.IMAP4.error as e:
+        print(f"Gmail login failed: {e}")
+        M = None
 
     # Connect to Outlook IMAP server
-    H = imaplib.IMAP4_SSL('imap-mail.outlook.com')
-    H.login(outlook_username, outlook_password)
-    H.select('inbox')
+    try:
+        H = imaplib.IMAP4_SSL('imap-mail.outlook.com')
+        H.login(outlook_username, outlook_password)
+        H.select('inbox')
+        print("Logged into Outlook.")
+    except imaplib.IMAP4.error as e:
+        print(f"Outlook login failed: {e}")
+        H = None
 
     # Search and process emails from Gmail and Outlook
-    search_and_process_emails(M, "Gmail", args.keyword, start_date, end_date)
-    search_and_process_emails(H, "Outlook", args.keyword, start_date, end_date)
-
-    M.logout()
-    H.logout()
+    if M:
+        search_and_process_emails(M, "Gmail", args.keyword, start_date, end_date)
+        M.logout()
+    if H:
+        search_and_process_emails(H, "Outlook", args.keyword, start_date, end_date)
+        H.logout()
 
 if __name__ == "__main__":
     main()
